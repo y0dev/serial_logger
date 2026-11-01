@@ -9,8 +9,8 @@ keyword parsing. Two front ends share the same core:
 | `main.py` | A real or virtual COM port (e.g. a board's debug UART) |
 | `tcp_logger.py` | A TCP socket (e.g. Xilinx's JTAG UART terminal on localhost) |
 
-Both reconnect automatically and give up after `MAX_RETRIES` consecutive
-failures. `Ctrl+C` stops cleanly.
+Both reconnect automatically every 2 s and give up after `MAX_RETRIES` (5)
+consecutive failures, about 10 s. `Ctrl+C` stops cleanly.
 
 ## Install
 
@@ -53,6 +53,7 @@ can be added after the file name, e.g. `run_serial.bat --filter ERROR`.
 | `--no-timestamps` | Don't prefix lines with a timestamp (text format and console) |
 | `--date` | Include the date in every timestamp |
 | `--no-keywords` | Disable keyword parsing |
+| `--no-save-keywords` | Parse keywords but don't write `parsed_keyword/*.jsonl` |
 | `--no-interactive` | Receive only; don't send what you type |
 | `--eol lf\|cr\|crlf\|none` | Line ending added to what you type (default `lf`) |
 | `--mark-cmd CMD` | Command that inserts a marker (default `/mark`) |
@@ -66,6 +67,9 @@ can be added after the file name, e.g. `run_serial.bat --filter ERROR`.
 Anything you type is sent to the device followed by the `--eol` ending. If a
 device waits for a carriage return, as many UART shells do, use `--eol cr` or
 `--eol crlf`.
+
+Each line sent is also written to the log file as `[TX] <line>`, so the log
+shows what you sent and when. Lines that fail to send are not logged.
 
 Type `/mark` or `/mark some label` and press Enter to insert a divider in the
 log, for example before starting a test. Marker lines are never sent to the
@@ -129,6 +133,10 @@ Every parsed result is appended as a JSON line to
 ```json
 {"keyword": "BOOT", "fields": {"ms": "1520"}, "lines": "Boot complete in 1520 ms"}
 ```
+
+Each keyword's file is opened on its first result and kept open (flushed after
+every result) until the logger stops. Pass `--no-save-keywords` to parse and
+print results without saving them.
 
 ### Act on a keyword
 

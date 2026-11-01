@@ -146,6 +146,21 @@ class KeywordParserTests(unittest.TestCase):
         recs = [json.loads(x) for x in (d / "parsed_keyword" / "A.jsonl").read_text(encoding="utf-8").splitlines()]
         self.assertEqual([r["fields"] for r in recs], [{"n": "1"}, {"n": "2"}])
         self.assertEqual(recs[0]["keyword"], "A")
+        p.close()
+
+    def test_result_file_kept_open_between_results(self):
+        d = Path(tempfile.mkdtemp())
+        p = KeywordParser(d, {"A": "a"})
+        with mock.patch("builtins.open", wraps=open) as opened:
+            for _ in range(3):
+                p.feed("a")
+                p.feed("a")
+        self.assertEqual(opened.call_count, 1)
+        p.close()
+        self.assertEqual(len((d / "parsed_keyword" / "A.jsonl").read_text(encoding="utf-8").splitlines()), 3)
+
+    def test_close_is_safe_without_files(self):
+        KeywordParser(keywords={"A": "a"}).close()
 
     def test_no_session_dir_writes_nothing(self):
         p = KeywordParser(keywords={"A": "a"})
@@ -173,7 +188,19 @@ class BuildKeywordParserTests(unittest.TestCase):
         p = lc.build_keyword_parser(None, d)
         p.feed("START a")
         p.feed("START a")
+        p.close()
         self.assertTrue((d / "parsed_keyword" / "START.jsonl").is_file())
+
+    def test_no_save_keywords_flag(self):
+        ap = argparse.ArgumentParser()
+        lc.add_common_args(ap)
+        self.assertFalse(ap.parse_args([]).no_save_keywords)
+        d = Path(tempfile.mkdtemp())
+        p = lc.build_keyword_parser(ap.parse_args(["--no-save-keywords"]), d)
+        self.assertIsNotNone(p)  # still parses
+        p.feed("START a")
+        self.assertEqual(p.feed("START a")["fields"], {"id": "a"})
+        self.assertFalse((d / "parsed_keyword").exists())
 
     def test_no_keywords_flag(self):
         ap = argparse.ArgumentParser()
@@ -208,6 +235,19 @@ class ProcessAndLogTests(unittest.TestCase):
         self.run_one("START abc", kw_parser=p)  # arms the parser
         _, out = self.run_one("START xyz", kw_parser=p)
         self.assertIn("Parsed keyword 'START': {'id': 'xyz'}", out)
+
+    def test_keyword_result_printed_once_and_uncolored(self):
+        p = KeywordParser(keywords={"START": r"START (?P<id>\w+)"})
+        self.run_one("START abc", kw_parser=p)
+        _, out = self.run_one("START xyz", kw_parser=p, color=False)
+        self.assertEqual(out.count("xyz"), 2)  # the line itself + one parse result
+        self.assertNotIn("\033[", out)
+
+    def test_parse_prints_nothing(self):
+        out = io.StringIO()
+        with redirect_stdout(out):
+            KeywordParser(keywords={"A": "a"}).parse("A", "a")
+        self.assertEqual(out.getvalue(), "")
 
     def test_filter_only_drops_nonmatching(self):
         w, out = self.run_one("nope", pattern=re.compile("yes"), filter_only=True)
@@ -279,6 +319,35 @@ class StdinReaderTests(unittest.TestCase):
     def test_marker_disabled(self):
         r = lc.StdinReader(True, "lf", None, lambda label: None)
         self.assertIsNone(r._marker_label("/mark"))
+
+    def run_reader(self, typed, send):
+        sent_lines = []
+        r = lc.StdinReader(True, "crlf", "/mark", lambda label: None, sent_lines.append)
+        r.set_target(send)
+        with mock.patch.object(lc.sys, "stdin", io.StringIO(typed)), redirect_stderr(io.StringIO()):
+            r.run()
+        return sent_lines
+
+    def test_sent_lines_reported(self):
+        wire = []
+        self.assertEqual(self.run_reader("help\n/mark x\nreboot\n", wire.append), ["help", "reboot"])
+        self.assertEqual(wire, [b"help\r\n", b"reboot\r\n"])
+
+    def test_failed_send_not_reported(self):
+        def fail(data):
+            raise OSError("gone")
+        self.assertEqual(self.run_reader("help\n", fail), [])
+
+    def test_write_sent_logs_tx_line(self):
+        w = FakeWriter()
+        lc.write_sent(w, "reboot")
+        self.assertEqual(w.records, [("00:00:00.000", "[TX] reboot", False)])
+
+
+class RetryLimitTests(unittest.TestCase):
+    def test_default_gives_up_within_10_seconds(self):
+        for mod in (serial_main, tcp_logger):
+            self.assertLessEqual(mod.MAX_RETRIES * mod.RECONNECT_DELAY_SEC, 10, mod.__name__)
 
 
 class ChoosePortTests(unittest.TestCase):

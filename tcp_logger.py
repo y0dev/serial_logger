@@ -20,11 +20,12 @@ from log_common import (
     start_stdin_reader,
     timestamp,
     write_marker,
+    write_sent,
     write_session_banner,
 )
 
 RECONNECT_DELAY_SEC = 2
-MAX_RETRIES = 5
+MAX_RETRIES = 5  # 5 x 2 s: give up after ~10 s of failed reconnects
 
 def recv_or_none(sock):
     """recv() that returns None on a read timeout (b'' still means closed)."""
@@ -40,7 +41,8 @@ def run(args):
     color = args.color and sys.stdout.isatty()  # no ANSI in redirected output
     mark_cmd = args.mark_cmd if args.markers else None
     reader = start_stdin_reader(args.interactive, args.eol, mark_cmd,
-                                lambda label: write_marker(writer, label, color))
+                                lambda label: write_marker(writer, label, color),
+                                lambda line: write_sent(writer, line))
     print(f"Logging {args.host}:{args.port} to {log_path}")
     if args.interactive:
         print("Interactive mode: type to send to the connection.")

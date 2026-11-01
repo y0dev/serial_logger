@@ -227,7 +227,14 @@ def process_and_log(line, pattern, filter_only, writer, color=True, kw_parser: K
     if kw_parser:
         result = kw_parser.feed(line)
         if result:
-            print(f"[{ts}] Parsed keyword '{result['keyword']}': {result['fields']}")
+            text = f"[{ts}] Parsed keyword '{result['keyword']}': {result['fields']}"
+            print(f"{ANSI_DIM}{text}{ANSI_RESET}" if color else text)
+
+
+def write_sent(writer, line):
+    """Record a line sent to the device in the log file (the console already
+    shows what was typed)."""
+    writer.write(writer.stamp(), f"[TX] {line}", False)
 
 
 def write_marker(writer, label, color=True):
@@ -253,19 +260,21 @@ class StdinReader(threading.Thread):
 
       - a line equal to (or starting with) mark_cmd inserts a marker, even
         in interactive mode, so it never reaches the device;
-      - any other line is forwarded to the connection when interactive;
+      - any other line is forwarded to the connection when interactive,
+        then passed to on_sent (if given) so it can be logged;
       - otherwise (capture mode) it is ignored.
 
     The send target is set per connection so input is dropped while
     disconnected instead of leaking a thread per reconnect.
     """
 
-    def __init__(self, interactive, eol, mark_cmd, on_marker):
+    def __init__(self, interactive, eol, mark_cmd, on_marker, on_sent=None):
         super().__init__(daemon=True)
         self.interactive = interactive
         self.suffix = EOL_MAP[eol]
         self.mark_cmd = mark_cmd      # None disables marker interception
         self.on_marker = on_marker
+        self.on_sent = on_sent
         self._send = None
         self._lock = threading.Lock()
 
@@ -307,6 +316,9 @@ class StdinReader(threading.Thread):
                 send(data)
             except OSError as exc:
                 print(f"[{timestamp()}] send failed: {exc}", file=sys.stderr)
+                continue
+            if self.on_sent:
+                self.on_sent(line)
 
 
 def run_guarded(run, args):
@@ -325,7 +337,7 @@ def run_guarded(run, args):
         sys.exit(130)
 
 
-def start_stdin_reader(interactive, eol, mark_cmd, on_marker):
+def start_stdin_reader(interactive, eol, mark_cmd, on_marker, on_sent=None):
     """Start a StdinReader if there's anything for it to do, else return None.
 
     Skipped when stdin isn't a terminal (e.g. piped) so we don't consume
@@ -336,7 +348,7 @@ def start_stdin_reader(interactive, eol, mark_cmd, on_marker):
         return None
     if not interactive and not mark_cmd:
         return None
-    reader = StdinReader(interactive, eol, mark_cmd, on_marker)
+    reader = StdinReader(interactive, eol, mark_cmd, on_marker, on_sent)
     reader.start()
     return reader
 
@@ -348,13 +360,16 @@ def build_keyword_parser(args=None, session_dir=None):
         args: Parsed command-line arguments. Unused for now; accepted so
             options can later control keyword parsing without changing callers.
         session_dir: Session log directory; parsed results are saved under
-            ``<session_dir>/parsed_keyword/`` when given.
+            ``<session_dir>/parsed_keyword/`` when given, unless
+            --no-save-keywords was passed.
 
     Returns:
         A KeywordParser, or None if KEYWORDS is empty (parsing disabled).
     """
     if args and getattr(args, "no_keywords", False):
         return None
+    if args and getattr(args, "no_save_keywords", False):
+        session_dir = None
     return KeywordParser(session_dir, KEYWORDS) if KEYWORDS else None
 
 
@@ -372,6 +387,7 @@ def add_common_args(parser):
     parser.add_argument("--date", action="store_true", help="Include the date in every line's timestamp (default: time only; the session banner always records the full start date)")
     parser.add_argument("--format", choices=["text", "csv", "json"], default="text", help="Log file format (default: text). csv -> .csv with timestamp,matched,line columns; json -> JSON Lines (.jsonl), one object per line")
     parser.add_argument("--no-keywords", action="store_true", help="Disable keyword parsing (see KEYWORDS in keyword_parser.py)")
+    parser.add_argument("--no-save-keywords", action="store_true", help="Parse keywords but don't save results to <session>/parsed_keyword/*.jsonl")
     parser.add_argument("--no-interactive", dest="interactive", action="store_false",
                         help="Receive-only; don't forward your stdin to the connection")
     parser.add_argument("--eol", choices=EOL_MAP, default="lf",
