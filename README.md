@@ -77,11 +77,15 @@ device.
 
 ### Log location
 
-Each run gets its own folder:
+All runs of a day share one folder; each run's log is named after its start
+time:
 
 ```
-logs/YYYY/MM_MON/MM_DD_YYYY/HH_MM_SS/<port>.log
+logs/YYYY/MM_MON/MM_DD_YYYY/HH_MM_SS_<port>.log
 ```
+
+With `--name`, the log is named exactly as given (no time prefix), so
+`--overwrite` can replace it on the next run.
 
 ### Line endings
 
@@ -128,7 +132,9 @@ How it behaves:
 ### Saved results
 
 Every parsed result is appended as a JSON line to
-`<session folder>/parsed_keyword/<KEYWORD>.jsonl`, next to the log file:
+`<day folder>/parsed_keyword/<log name>_<KEYWORD>.jsonl`, next to the log file
+(e.g. `14_22_01_COM5_BOOT.jsonl` for `14_22_01_COM5.log`), so each run keeps
+its own results:
 
 ```json
 {"keyword": "BOOT", "fields": {"ms": "1520"}, "lines": "Boot complete in 1520 ms"}

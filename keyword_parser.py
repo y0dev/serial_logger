@@ -41,7 +41,7 @@ class KeywordParser:
         data: The StartData from the most recent START line, or None.
     """
 
-    def __init__(self, session_dir=None, keywords=KEYWORDS):
+    def __init__(self, session_dir=None, keywords=KEYWORDS, file_prefix=""):
         """Initializes the parser.
 
         Args:
@@ -50,6 +50,9 @@ class KeywordParser:
                 ``<session_dir>/parsed_keyword/<KEYWORD>.jsonl``. If None,
                 results are only returned and printed, never saved. Call
                 close() when done to close the files.
+            file_prefix: Prepended to each result file name, e.g.
+                "14_22_01_COM5_" -> ``14_22_01_COM5_START.jsonl``, so runs
+                that share a session directory keep separate files.
             keywords: Mapping of keyword name to a regular expression, given
                 either as a string or as an already compiled pattern.
         """
@@ -57,6 +60,7 @@ class KeywordParser:
         self.session_dir = Path(session_dir) / "parsed_keyword" if session_dir else None
         self.patterns = {name: re.compile(pattern) for name, pattern in keywords.items()}
         self.data = None
+        self.file_prefix = file_prefix
         self._files = {}  # keyword -> open .jsonl file, kept open for the session
 
     def feed(self, line):
@@ -91,7 +95,7 @@ class KeywordParser:
         f = self._files.get(result["keyword"])
         if f is None:
             self.session_dir.mkdir(parents=True, exist_ok=True)
-            path = self.session_dir / f"{result['keyword']}.jsonl"
+            path = self.session_dir / f"{self.file_prefix}{result['keyword']}.jsonl"
             f = self._files[result["keyword"]] = open(path, "a", encoding="utf-8")
         f.write(json.dumps(result, ensure_ascii=False) + "\n")
         f.flush()  # keep results on disk if the logger is killed

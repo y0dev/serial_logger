@@ -159,6 +159,16 @@ class KeywordParserTests(unittest.TestCase):
         p.close()
         self.assertEqual(len((d / "parsed_keyword" / "A.jsonl").read_text(encoding="utf-8").splitlines()), 3)
 
+    def test_file_prefix_keeps_runs_separate(self):
+        d = Path(tempfile.mkdtemp())
+        for prefix in ("10_00_00_COM5_", "11_00_00_COM5_"):
+            p = KeywordParser(d, {"A": "a"}, prefix)
+            p.feed("a")
+            p.feed("a")
+            p.close()
+        names = sorted(f.name for f in (d / "parsed_keyword").iterdir())
+        self.assertEqual(names, ["10_00_00_COM5_A.jsonl", "11_00_00_COM5_A.jsonl"])
+
     def test_close_is_safe_without_files(self):
         KeywordParser(keywords={"A": "a"}).close()
 
@@ -307,7 +317,25 @@ class PathTests(unittest.TestCase):
 
     def test_session_dir_layout(self):
         s = lc.build_session_log_dir("logs", datetime(2024, 3, 5, 14, 22, 1))
-        self.assertEqual(Path(s).parts[-4:], ("2024", "03_MAR", "03_05_2024", "14_22_01"))
+        self.assertEqual(Path(s).parts[-4:], ("logs", "2024", "03_MAR", "03_05_2024"))
+
+    def test_default_name_has_start_time_prefix(self):
+        d = Path(tempfile.mkdtemp())
+        p = lc.log_base_path(d, "\\\\.\\COM12", None, "log", datetime(2024, 3, 5, 14, 22, 1))
+        self.assertEqual(p.name, "14_22_01_COM12.log")
+
+    def test_custom_name_has_no_time_prefix(self):
+        d = Path(tempfile.mkdtemp())
+        self.assertEqual(lc.log_base_path(d, "COM5", "run", "log", datetime(2024, 3, 5, 14, 22, 1)).name, "run.log")
+
+    def test_open_log_writer_uses_one_timestamp(self):
+        fixed = datetime(2024, 3, 5, 23, 59, 59)
+        with mock.patch.object(lc.datetime, "datetime", wraps=datetime) as dt:
+            dt.now.return_value = fixed
+            w, path = lc.open_log_writer(args_for(), "COM5")
+        w.close()
+        self.assertEqual(path.parent.name, "03_05_2024")
+        self.assertEqual(path.name, "23_59_59_COM5.log")
 
 
 class StdinReaderTests(unittest.TestCase):

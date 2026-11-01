@@ -50,15 +50,19 @@ def timestamp(date=False):
 FORMAT_EXT = {"text": "log", "csv": "csv", "json": "jsonl"}
 
 
-def log_base_path(log_dir, prefix, name, ext):
-    """Resolve the base log path (before any rotation suffix)."""
+def log_base_path(log_dir, prefix, name, ext, now=None):
+    """Resolve the base log path (before any rotation suffix).
+
+    A custom name is used as given; otherwise the file is named
+    HH_MM_SS_<prefix>.<ext> from the session start time.
+    """
     log_dir.mkdir(parents=True, exist_ok=True)
     if name:
-        name = name if "." in name else f"{name}.{ext}"
-    else:
-        # Port names like /dev/ttyUSB0 or \\.\COM12 must not become path parts.
-        name = f"{re.sub(r'[^\w.-]+', '_', str(prefix)).strip('_.')}.{ext}"
-    return log_dir / name
+        return log_dir / (name if "." in name else f"{name}.{ext}")
+    now = now or datetime.datetime.now()
+    # Port names like /dev/ttyUSB0 or \\.\COM12 must not become path parts.
+    safe = re.sub(r'[^\w.-]+', '_', str(prefix)).strip('_.')
+    return log_dir / f"{now.strftime('%H_%M_%S')}_{safe}.{ext}"
 
 
 class LogWriter:
@@ -130,22 +134,19 @@ def build_session_log_dir(base_dir: str, now: datetime) -> str:
     """
     Construct a structured log directory path rooted at base_dir:
 
-        <base_dir>/YYYY/MM_MMM/HH_mm_ss
+        <base_dir>/YYYY/MM_MMM/MM_DD_YYYY
 
     Component breakdown:
-        YYYY     — four-digit year                    e.g. 2024
-        MM_MMM   — two-digit month number + underscore + three-letter month name
-                   e.g. 03_MAR  (zero-padded month, uppercase abbreviation)
-        HH_mm_ss — session start time:  hour_minute_second
-                   e.g. 14_22_01
+        YYYY       — four-digit year                    e.g. 2024
+        MM_MMM     — two-digit month number + underscore + three-letter month name
+                     e.g. 03_MAR  (zero-padded month, uppercase abbreviation)
+        MM_DD_YYYY — the session's date                 e.g. 03_15_2024
 
-    Example full path:
-        ./logs/2024/03_MAR/14_22_01
+    Example full path of a log in it (see log_base_path):
+        ./logs/2024/03_MAR/03_15_2024/14_22_01_<port>.log
 
-    Each session gets its own leaf directory so every run is isolated and
-    log files never collide, even across restarts within the same second.
-    The directory is created by the callers (setup_session_logger /
-    setup_port_logger) via Path.mkdir(parents=True, exist_ok=True).
+    All runs of one day share this folder; each run's files are told apart
+    by their HH_MM_SS_ prefix. The directory is created by log_base_path.
 
     Args:
         base_dir — root log directory from config (e.g. "./logs")
@@ -157,15 +158,15 @@ def build_session_log_dir(base_dir: str, now: datetime) -> str:
     year           = now.strftime("%Y")           # 2024
     month          = now.strftime("%m_%b").upper()  # 03_MAR  (strftime %b = Jan/Feb/Mar…)
     month_day_year = now.strftime("%m_%d_%Y")
-    time_dir       = now.strftime("%H_%M_%S")     # 14_22_01
 
-    return str(Path(base_dir) / year / month / month_day_year / time_dir)
+    return str(Path(base_dir) / year / month / month_day_year)
 
 def open_log_writer(args, prefix):
     """Open the log file(s) per args and wrap in a LogWriter. Returns (writer, path)."""
     ext = FORMAT_EXT[args.format]
-    session_dir = build_session_log_dir(args.log_dir, datetime.datetime.now())
-    base = log_base_path(Path(session_dir), prefix, args.name, ext)
+    now = datetime.datetime.now()  # one clock read, so the date folder and file time agree
+    session_dir = build_session_log_dir(args.log_dir, now)
+    base = log_base_path(Path(session_dir), prefix, args.name, ext, now)
     max_bytes = int(args.max_mb * 1024 * 1024) if args.max_mb else 0
     writer = LogWriter(base, args.format, args.timestamps, args.date,
                        args.overwrite, max_bytes)
@@ -353,7 +354,7 @@ def start_stdin_reader(interactive, eol, mark_cmd, on_marker, on_sent=None):
     return reader
 
 
-def build_keyword_parser(args=None, session_dir=None):
+def build_keyword_parser(args=None, session_dir=None, file_prefix=""):
     """Build the KeywordParser from keyword_parser.KEYWORDS.
 
     Args:
@@ -362,6 +363,8 @@ def build_keyword_parser(args=None, session_dir=None):
         session_dir: Session log directory; parsed results are saved under
             ``<session_dir>/parsed_keyword/`` when given, unless
             --no-save-keywords was passed.
+        file_prefix: Prepended to each result file name so runs sharing a
+            folder don't mix (e.g. "14_22_01_COM5_" -> 14_22_01_COM5_START.jsonl).
 
     Returns:
         A KeywordParser, or None if KEYWORDS is empty (parsing disabled).
@@ -370,7 +373,7 @@ def build_keyword_parser(args=None, session_dir=None):
         return None
     if args and getattr(args, "no_save_keywords", False):
         session_dir = None
-    return KeywordParser(session_dir, KEYWORDS) if KEYWORDS else None
+    return KeywordParser(session_dir, KEYWORDS, file_prefix) if KEYWORDS else None
 
 
 def add_common_args(parser):
