@@ -227,7 +227,14 @@ def process_and_log(line, pattern, filter_only, writer, color=True, kw_parser: K
     if kw_parser:
         result = kw_parser.feed(line)
         if result:
-            print(f"[{ts}] Parsed keyword '{result['keyword']}': {result['fields']}")
+            text = f"[{ts}] Parsed keyword '{result['keyword']}': {result['fields']}"
+            print(f"{ANSI_DIM}{text}{ANSI_RESET}" if color else text)
+
+
+def write_sent(writer, line):
+    """Record a line sent to the device in the log file (the console already
+    shows what was typed)."""
+    writer.write(writer.stamp(), f"[TX] {line}", False)
 
 
 def write_marker(writer, label, color=True):
@@ -253,19 +260,21 @@ class StdinReader(threading.Thread):
 
       - a line equal to (or starting with) mark_cmd inserts a marker, even
         in interactive mode, so it never reaches the device;
-      - any other line is forwarded to the connection when interactive;
+      - any other line is forwarded to the connection when interactive,
+        then passed to on_sent (if given) so it can be logged;
       - otherwise (capture mode) it is ignored.
 
     The send target is set per connection so input is dropped while
     disconnected instead of leaking a thread per reconnect.
     """
 
-    def __init__(self, interactive, eol, mark_cmd, on_marker):
+    def __init__(self, interactive, eol, mark_cmd, on_marker, on_sent=None):
         super().__init__(daemon=True)
         self.interactive = interactive
         self.suffix = EOL_MAP[eol]
         self.mark_cmd = mark_cmd      # None disables marker interception
         self.on_marker = on_marker
+        self.on_sent = on_sent
         self._send = None
         self._lock = threading.Lock()
 
@@ -307,6 +316,9 @@ class StdinReader(threading.Thread):
                 send(data)
             except OSError as exc:
                 print(f"[{timestamp()}] send failed: {exc}", file=sys.stderr)
+                continue
+            if self.on_sent:
+                self.on_sent(line)
 
 
 def run_guarded(run, args):
@@ -325,7 +337,7 @@ def run_guarded(run, args):
         sys.exit(130)
 
 
-def start_stdin_reader(interactive, eol, mark_cmd, on_marker):
+def start_stdin_reader(interactive, eol, mark_cmd, on_marker, on_sent=None):
     """Start a StdinReader if there's anything for it to do, else return None.
 
     Skipped when stdin isn't a terminal (e.g. piped) so we don't consume
@@ -336,7 +348,7 @@ def start_stdin_reader(interactive, eol, mark_cmd, on_marker):
         return None
     if not interactive and not mark_cmd:
         return None
-    reader = StdinReader(interactive, eol, mark_cmd, on_marker)
+    reader = StdinReader(interactive, eol, mark_cmd, on_marker, on_sent)
     reader.start()
     return reader
 

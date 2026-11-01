@@ -1,11 +1,8 @@
 """Matches log lines against named keyword patterns and extracts their fields."""
 import json
 import re
-from datetime import datetime
 from dataclasses import dataclass, field
 from pathlib import Path
-
-from ansi import ANSI_DIM, ANSI_RESET
 
 
 # Keywords matched by default. Name -> regex; named groups become the fields.
@@ -13,12 +10,6 @@ from ansi import ANSI_DIM, ANSI_RESET
 KEYWORDS = {
     "START": r"\bSTART\b(?:\s+(?P<id>\w+))?",
 }
-
-
-def _timestamp():
-    """Current time as HH:MM:SS.mmm (same format as log_common.timestamp, which
-    can't be imported here without a circular import)."""
-    return datetime.now().strftime("%H:%M:%S.%f")[:-3]
 
 
 @dataclass
@@ -132,11 +123,5 @@ class KeywordParser:
         if name == "START":
             self.data = StartData(raw=line.replace("\n", ""), fields=fields)
         # Additional logic for other keywords can be added here.
-
-        if fields:
-            pretty = " ".join(f"{k}={v}" for k, v in fields.items())
-            print(f"{ANSI_DIM}[{_timestamp()}] {name} -> {pretty}{ANSI_RESET}")
-        else:
-            print(f"{ANSI_DIM}[{_timestamp()}] {name} -> {line}{ANSI_RESET}")
 
         return result

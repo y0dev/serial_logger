@@ -236,6 +236,19 @@ class ProcessAndLogTests(unittest.TestCase):
         _, out = self.run_one("START xyz", kw_parser=p)
         self.assertIn("Parsed keyword 'START': {'id': 'xyz'}", out)
 
+    def test_keyword_result_printed_once_and_uncolored(self):
+        p = KeywordParser(keywords={"START": r"START (?P<id>\w+)"})
+        self.run_one("START abc", kw_parser=p)
+        _, out = self.run_one("START xyz", kw_parser=p, color=False)
+        self.assertEqual(out.count("xyz"), 2)  # the line itself + one parse result
+        self.assertNotIn("\033[", out)
+
+    def test_parse_prints_nothing(self):
+        out = io.StringIO()
+        with redirect_stdout(out):
+            KeywordParser(keywords={"A": "a"}).parse("A", "a")
+        self.assertEqual(out.getvalue(), "")
+
     def test_filter_only_drops_nonmatching(self):
         w, out = self.run_one("nope", pattern=re.compile("yes"), filter_only=True)
         self.assertEqual((w.records, out), ([], ""))
@@ -306,6 +319,35 @@ class StdinReaderTests(unittest.TestCase):
     def test_marker_disabled(self):
         r = lc.StdinReader(True, "lf", None, lambda label: None)
         self.assertIsNone(r._marker_label("/mark"))
+
+    def run_reader(self, typed, send):
+        sent_lines = []
+        r = lc.StdinReader(True, "crlf", "/mark", lambda label: None, sent_lines.append)
+        r.set_target(send)
+        with mock.patch.object(lc.sys, "stdin", io.StringIO(typed)), redirect_stderr(io.StringIO()):
+            r.run()
+        return sent_lines
+
+    def test_sent_lines_reported(self):
+        wire = []
+        self.assertEqual(self.run_reader("help\n/mark x\nreboot\n", wire.append), ["help", "reboot"])
+        self.assertEqual(wire, [b"help\r\n", b"reboot\r\n"])
+
+    def test_failed_send_not_reported(self):
+        def fail(data):
+            raise OSError("gone")
+        self.assertEqual(self.run_reader("help\n", fail), [])
+
+    def test_write_sent_logs_tx_line(self):
+        w = FakeWriter()
+        lc.write_sent(w, "reboot")
+        self.assertEqual(w.records, [("00:00:00.000", "[TX] reboot", False)])
+
+
+class RetryLimitTests(unittest.TestCase):
+    def test_default_gives_up_within_10_seconds(self):
+        for mod in (serial_main, tcp_logger):
+            self.assertLessEqual(mod.MAX_RETRIES * mod.RECONNECT_DELAY_SEC, 10, mod.__name__)
 
 
 class ChoosePortTests(unittest.TestCase):
