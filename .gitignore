@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Logger output
+logs/
+test_results/
+
+# zip_folder.py output
+*.zip
+
+# VS Code extension build output
+node_modules/
+out/
+dist/
+*.vsix
+
+# Editors / OS
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store

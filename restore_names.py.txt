@@ -1,0 +1,103 @@
+"""Add or remove a trailing ".txt" on every file in a folder tree.
+
+    python restore_names.py                 # restore (default): main.py.txt -> main.py
+    python restore_names.py restore         # same as above
+    python restore_names.py add             # add .txt:           main.py     -> main.py.txt
+    python restore_names.py add --dry-run   # show what would change, rename nothing
+    python restore_names.py restore --root path/to/folder
+    python restore_names.py add --exclude docs --exclude "app/assets"   # also skip these folders
+    python restore_names.py add --no-default-excludes                   # process even .git, .venv, ...
+
+Rules
+  * restore only touches "<name>.<ext>.txt" files and strips the last ".txt"
+    (main.py.txt -> main.py, requirements.txt.txt -> requirements.txt).
+    Files that are only ".txt" (README.txt, notes.txt) are left alone.
+  * add never touches files that already end in ".txt".
+  * ".json" files are never renamed in either direction.
+  * Excluded folders (DEFAULT_EXCLUDE_DIRS plus any --exclude) are skipped completely, with everything
+    inside them. An exclude matches a folder name anywhere ("docs") or a path relative to the root
+    ("app/assets"); wildcards work.
+  * This script itself is never renamed, and existing files are never overwritten.
+
+Save this file as restore_names.py (if it arrived as restore_names.py.txt) and run it from anywhere;
+the default root is the folder containing the script.
+"""
+import argparse
+import fnmatch
+import os
+import sys
+
+SKIP_EXT = (".json", ".csv", ".c", ".h", ".md", ".log", ".html", ".htm", ".xml", ".yml", ".yaml", ".ini", ".cfg", ".conf", ".ppt", ".pptx", ".doc", ".docx", ".xls", ".xlsx", ".pdf", ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tiff", ".ico")
+# Folders skipped by default (edit this list to change the defaults). Entries are folder names or
+# relative paths and may use wildcards, e.g. "build", "docs/screenshots", "*.egg-info".
+DEFAULT_EXCLUDE_DIRS = [".git", ".venv", "venv", "__pycache__", ".pytest_cache", "node_modules", ".idea", ".vscode"]
+
+
+def inner_extension(stem: str) -> str:
+    return os.path.splitext(stem)[1].lower()
+
+
+def target_name(name: str, mode: str) -> str | None:
+    """New name for *name*, or None if the file must be left alone."""
+    lower = name.lower()
+    if lower.startswith("restore_names"):
+        return None
+    if lower.endswith(SKIP_EXT):
+        return None
+    if mode == "add":
+        return None if lower.endswith(".txt") else name + ".txt"
+    # restore
+    if not lower.endswith(".txt"):
+        return None
+    stem = name[:-4]
+    ext = inner_extension(stem)
+    if not ext or ext in SKIP_EXT:      # plain ".txt" files (README.txt) and .json files are left alone
+        return None
+    return stem
+
+
+def is_excluded(rel_dir: str, patterns: list[str]) -> bool:
+    rel = rel_dir.replace(os.sep, "/")
+    base = rel.rsplit("/", 1)[-1]
+    return any(fnmatch.fnmatch(base, p) or fnmatch.fnmatch(rel, p.strip("/")) for p in patterns)
+
+
+def run(root: str, mode: str, dry_run: bool = False, exclude: list[str] | None = None) -> int:
+    patterns = list(exclude or [])
+    changed = 0
+    for folder, dirs, files in os.walk(root):
+        dirs[:] = [d for d in dirs if not is_excluded(os.path.relpath(os.path.join(folder, d), root), patterns)]
+        for name in sorted(files):
+            new = target_name(name, mode)
+            if new is None:
+                continue
+            src, dst = os.path.join(folder, name), os.path.join(folder, new)
+            if os.path.exists(dst):
+                print("skip (target exists):", os.path.relpath(dst, root))
+                continue
+            print(f"{'would rename' if dry_run else 'rename'}: {os.path.relpath(src, root)} -> {new}")
+            if not dry_run:
+                os.rename(src, dst)
+            changed += 1
+    return changed
+
+
+def main() -> int:
+    p = argparse.ArgumentParser(description="Add or remove a trailing .txt on files.")
+    p.add_argument("mode", nargs="?", choices=["restore", "add"], default="restore",
+                   help="restore (default): strip .txt; add: append .txt")
+    p.add_argument("--root", default=os.path.dirname(os.path.abspath(__file__)), help="folder to process")
+    p.add_argument("--exclude", action="append", default=[], metavar="DIR",
+                   help="folder name or relative path to skip (repeatable, wildcards allowed)")
+    p.add_argument("--no-default-excludes", action="store_true",
+                   help="do not skip the default folders (" + ", ".join(DEFAULT_EXCLUDE_DIRS) + ")")
+    p.add_argument("--dry-run", action="store_true", help="only print what would change")
+    args = p.parse_args()
+    exclude = ([] if args.no_default_excludes else DEFAULT_EXCLUDE_DIRS) + args.exclude
+    n = run(args.root, args.mode, args.dry_run, exclude)
+    print(f"{'Would change' if args.dry_run else 'Changed'} {n} file(s) ({args.mode})")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
