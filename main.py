@@ -102,6 +102,8 @@ def run(args):
         print("\nStopped.")
     finally:
         writer.close()
+        if keyword_parser:
+            keyword_parser.close()
 
 
 def parse_args():

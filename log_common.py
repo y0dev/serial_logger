@@ -348,13 +348,16 @@ def build_keyword_parser(args=None, session_dir=None):
         args: Parsed command-line arguments. Unused for now; accepted so
             options can later control keyword parsing without changing callers.
         session_dir: Session log directory; parsed results are saved under
-            ``<session_dir>/parsed_keyword/`` when given.
+            ``<session_dir>/parsed_keyword/`` when given, unless
+            --no-save-keywords was passed.
 
     Returns:
         A KeywordParser, or None if KEYWORDS is empty (parsing disabled).
     """
     if args and getattr(args, "no_keywords", False):
         return None
+    if args and getattr(args, "no_save_keywords", False):
+        session_dir = None
     return KeywordParser(session_dir, KEYWORDS) if KEYWORDS else None
 
 
@@ -372,6 +375,7 @@ def add_common_args(parser):
     parser.add_argument("--date", action="store_true", help="Include the date in every line's timestamp (default: time only; the session banner always records the full start date)")
     parser.add_argument("--format", choices=["text", "csv", "json"], default="text", help="Log file format (default: text). csv -> .csv with timestamp,matched,line columns; json -> JSON Lines (.jsonl), one object per line")
     parser.add_argument("--no-keywords", action="store_true", help="Disable keyword parsing (see KEYWORDS in keyword_parser.py)")
+    parser.add_argument("--no-save-keywords", action="store_true", help="Parse keywords but don't save results to <session>/parsed_keyword/*.jsonl")
     parser.add_argument("--no-interactive", dest="interactive", action="store_false",
                         help="Receive-only; don't forward your stdin to the connection")
     parser.add_argument("--eol", choices=EOL_MAP, default="lf",

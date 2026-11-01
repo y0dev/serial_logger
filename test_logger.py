@@ -146,6 +146,21 @@ class KeywordParserTests(unittest.TestCase):
         recs = [json.loads(x) for x in (d / "parsed_keyword" / "A.jsonl").read_text(encoding="utf-8").splitlines()]
         self.assertEqual([r["fields"] for r in recs], [{"n": "1"}, {"n": "2"}])
         self.assertEqual(recs[0]["keyword"], "A")
+        p.close()
+
+    def test_result_file_kept_open_between_results(self):
+        d = Path(tempfile.mkdtemp())
+        p = KeywordParser(d, {"A": "a"})
+        with mock.patch("builtins.open", wraps=open) as opened:
+            for _ in range(3):
+                p.feed("a")
+                p.feed("a")
+        self.assertEqual(opened.call_count, 1)
+        p.close()
+        self.assertEqual(len((d / "parsed_keyword" / "A.jsonl").read_text(encoding="utf-8").splitlines()), 3)
+
+    def test_close_is_safe_without_files(self):
+        KeywordParser(keywords={"A": "a"}).close()
 
     def test_no_session_dir_writes_nothing(self):
         p = KeywordParser(keywords={"A": "a"})
@@ -173,7 +188,19 @@ class BuildKeywordParserTests(unittest.TestCase):
         p = lc.build_keyword_parser(None, d)
         p.feed("START a")
         p.feed("START a")
+        p.close()
         self.assertTrue((d / "parsed_keyword" / "START.jsonl").is_file())
+
+    def test_no_save_keywords_flag(self):
+        ap = argparse.ArgumentParser()
+        lc.add_common_args(ap)
+        self.assertFalse(ap.parse_args([]).no_save_keywords)
+        d = Path(tempfile.mkdtemp())
+        p = lc.build_keyword_parser(ap.parse_args(["--no-save-keywords"]), d)
+        self.assertIsNotNone(p)  # still parses
+        p.feed("START a")
+        self.assertEqual(p.feed("START a")["fields"], {"id": "a"})
+        self.assertFalse((d / "parsed_keyword").exists())
 
     def test_no_keywords_flag(self):
         ap = argparse.ArgumentParser()

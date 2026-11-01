@@ -53,6 +53,7 @@ can be added after the file name, e.g. `run_serial.bat --filter ERROR`.
 | `--no-timestamps` | Don't prefix lines with a timestamp (text format and console) |
 | `--date` | Include the date in every timestamp |
 | `--no-keywords` | Disable keyword parsing |
+| `--no-save-keywords` | Parse keywords but don't write `parsed_keyword/*.jsonl` |
 | `--no-interactive` | Receive only; don't send what you type |
 | `--eol lf\|cr\|crlf\|none` | Line ending added to what you type (default `lf`) |
 | `--mark-cmd CMD` | Command that inserts a marker (default `/mark`) |
@@ -129,6 +130,10 @@ Every parsed result is appended as a JSON line to
 ```json
 {"keyword": "BOOT", "fields": {"ms": "1520"}, "lines": "Boot complete in 1520 ms"}
 ```
+
+Each keyword's file is opened on its first result and kept open (flushed after
+every result) until the logger stops. Pass `--no-save-keywords` to parse and
+print results without saving them.
 
 ### Act on a keyword
 

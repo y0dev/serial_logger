@@ -56,7 +56,9 @@ class KeywordParser:
         Args:
             session_dir: Session log directory; if given, every parsed result
                 is appended as a JSON line to
-                ``<session_dir>/parsed_keyword/<KEYWORD>.jsonl``.
+                ``<session_dir>/parsed_keyword/<KEYWORD>.jsonl``. If None,
+                results are only returned and printed, never saved. Call
+                close() when done to close the files.
             keywords: Mapping of keyword name to a regular expression, given
                 either as a string or as an already compiled pattern.
         """
@@ -64,6 +66,7 @@ class KeywordParser:
         self.session_dir = Path(session_dir) / "parsed_keyword" if session_dir else None
         self.patterns = {name: re.compile(pattern) for name, pattern in keywords.items()}
         self.data = None
+        self._files = {}  # keyword -> open .jsonl file, kept open for the session
 
     def feed(self, line):
         """Detects a keyword line, then parses the line that follows it.
@@ -94,10 +97,19 @@ class KeywordParser:
         """Appends a parse result to its keyword's JSON Lines file, if enabled."""
         if not self.session_dir:
             return
-        self.session_dir.mkdir(parents=True, exist_ok=True)
-        path = self.session_dir / f"{result['keyword']}.jsonl"
-        with open(path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(result, ensure_ascii=False) + "\n")
+        f = self._files.get(result["keyword"])
+        if f is None:
+            self.session_dir.mkdir(parents=True, exist_ok=True)
+            path = self.session_dir / f"{result['keyword']}.jsonl"
+            f = self._files[result["keyword"]] = open(path, "a", encoding="utf-8")
+        f.write(json.dumps(result, ensure_ascii=False) + "\n")
+        f.flush()  # keep results on disk if the logger is killed
+
+    def close(self):
+        """Closes the result files opened by _save()."""
+        for f in self._files.values():
+            f.close()
+        self._files.clear()
 
     def parse(self, name, line):
         """Extracts the fields of a line for a known keyword.
