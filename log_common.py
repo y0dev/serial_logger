@@ -50,15 +50,19 @@ def timestamp(date=False):
 FORMAT_EXT = {"text": "log", "csv": "csv", "json": "jsonl"}
 
 
-def log_base_path(log_dir, prefix, name, ext):
-    """Resolve the base log path (before any rotation suffix)."""
+def log_base_path(log_dir, prefix, name, ext, now=None):
+    """Resolve the base log path (before any rotation suffix).
+
+    A custom name is used as given; otherwise the file is named
+    HH_MM_SS_<prefix>.<ext> from the session start time.
+    """
     log_dir.mkdir(parents=True, exist_ok=True)
     if name:
-        name = name if "." in name else f"{name}.{ext}"
-    else:
-        # Port names like /dev/ttyUSB0 or \\.\COM12 must not become path parts.
-        name = f"{re.sub(r'[^\w.-]+', '_', str(prefix)).strip('_.')}.{ext}"
-    return log_dir / name
+        return log_dir / (name if "." in name else f"{name}.{ext}")
+    now = now or datetime.datetime.now()
+    # Port names like /dev/ttyUSB0 or \\.\COM12 must not become path parts.
+    safe = re.sub(r'[^\w.-]+', '_', str(prefix)).strip('_.')
+    return log_dir / f"{now.strftime('%H_%M_%S')}_{safe}.{ext}"
 
 
 class LogWriter:
@@ -130,22 +134,19 @@ def build_session_log_dir(base_dir: str, now: datetime) -> str:
     """
     Construct a structured log directory path rooted at base_dir:
 
-        <base_dir>/YYYY/MM_MMM/HH_mm_ss
+        <base_dir>/YYYY/MM_MMM/MM_DD_YYYY
 
     Component breakdown:
-        YYYY     — four-digit year                    e.g. 2024
-        MM_MMM   — two-digit month number + underscore + three-letter month name
-                   e.g. 03_MAR  (zero-padded month, uppercase abbreviation)
-        HH_mm_ss — session start time:  hour_minute_second
-                   e.g. 14_22_01
+        YYYY       — four-digit year                    e.g. 2024
+        MM_MMM     — two-digit month number + underscore + three-letter month name
+                     e.g. 03_MAR  (zero-padded month, uppercase abbreviation)
+        MM_DD_YYYY — the session's date                 e.g. 03_15_2024
 
-    Example full path:
-        ./logs/2024/03_MAR/14_22_01
+    Example full path of a log in it (see log_base_path):
+        ./logs/2024/03_MAR/03_15_2024/14_22_01_<port>.log
 
-    Each session gets its own leaf directory so every run is isolated and
-    log files never collide, even across restarts within the same second.
-    The directory is created by the callers (setup_session_logger /
-    setup_port_logger) via Path.mkdir(parents=True, exist_ok=True).
+    All runs of one day share this folder; each run's files are told apart
+    by their HH_MM_SS_ prefix. The directory is created by log_base_path.
 
     Args:
         base_dir — root log directory from config (e.g. "./logs")
@@ -157,15 +158,15 @@ def build_session_log_dir(base_dir: str, now: datetime) -> str:
     year           = now.strftime("%Y")           # 2024
     month          = now.strftime("%m_%b").upper()  # 03_MAR  (strftime %b = Jan/Feb/Mar…)
     month_day_year = now.strftime("%m_%d_%Y")
-    time_dir       = now.strftime("%H_%M_%S")     # 14_22_01
 
-    return str(Path(base_dir) / year / month / month_day_year / time_dir)
+    return str(Path(base_dir) / year / month / month_day_year)
 
 def open_log_writer(args, prefix):
     """Open the log file(s) per args and wrap in a LogWriter. Returns (writer, path)."""
     ext = FORMAT_EXT[args.format]
-    session_dir = build_session_log_dir(args.log_dir, datetime.datetime.now())
-    base = log_base_path(Path(session_dir), prefix, args.name, ext)
+    now = datetime.datetime.now()  # one clock read, so the date folder and file time agree
+    session_dir = build_session_log_dir(args.log_dir, now)
+    base = log_base_path(Path(session_dir), prefix, args.name, ext, now)
     max_bytes = int(args.max_mb * 1024 * 1024) if args.max_mb else 0
     writer = LogWriter(base, args.format, args.timestamps, args.date,
                        args.overwrite, max_bytes)
@@ -227,7 +228,14 @@ def process_and_log(line, pattern, filter_only, writer, color=True, kw_parser: K
     if kw_parser:
         result = kw_parser.feed(line)
         if result:
-            print(f"[{ts}] Parsed keyword '{result['keyword']}': {result['fields']}")
+            text = f"[{ts}] Parsed keyword '{result['keyword']}': {result['fields']}"
+            print(f"{ANSI_DIM}{text}{ANSI_RESET}" if color else text)
+
+
+def write_sent(writer, line):
+    """Record a line sent to the device in the log file (the console already
+    shows what was typed)."""
+    writer.write(writer.stamp(), f"[TX] {line}", False)
 
 
 def write_marker(writer, label, color=True):
@@ -253,19 +261,21 @@ class StdinReader(threading.Thread):
 
       - a line equal to (or starting with) mark_cmd inserts a marker, even
         in interactive mode, so it never reaches the device;
-      - any other line is forwarded to the connection when interactive;
+      - any other line is forwarded to the connection when interactive,
+        then passed to on_sent (if given) so it can be logged;
       - otherwise (capture mode) it is ignored.
 
     The send target is set per connection so input is dropped while
     disconnected instead of leaking a thread per reconnect.
     """
 
-    def __init__(self, interactive, eol, mark_cmd, on_marker):
+    def __init__(self, interactive, eol, mark_cmd, on_marker, on_sent=None):
         super().__init__(daemon=True)
         self.interactive = interactive
         self.suffix = EOL_MAP[eol]
         self.mark_cmd = mark_cmd      # None disables marker interception
         self.on_marker = on_marker
+        self.on_sent = on_sent
         self._send = None
         self._lock = threading.Lock()
 
@@ -307,6 +317,9 @@ class StdinReader(threading.Thread):
                 send(data)
             except OSError as exc:
                 print(f"[{timestamp()}] send failed: {exc}", file=sys.stderr)
+                continue
+            if self.on_sent:
+                self.on_sent(line)
 
 
 def run_guarded(run, args):
@@ -325,7 +338,7 @@ def run_guarded(run, args):
         sys.exit(130)
 
 
-def start_stdin_reader(interactive, eol, mark_cmd, on_marker):
+def start_stdin_reader(interactive, eol, mark_cmd, on_marker, on_sent=None):
     """Start a StdinReader if there's anything for it to do, else return None.
 
     Skipped when stdin isn't a terminal (e.g. piped) so we don't consume
@@ -336,26 +349,31 @@ def start_stdin_reader(interactive, eol, mark_cmd, on_marker):
         return None
     if not interactive and not mark_cmd:
         return None
-    reader = StdinReader(interactive, eol, mark_cmd, on_marker)
+    reader = StdinReader(interactive, eol, mark_cmd, on_marker, on_sent)
     reader.start()
     return reader
 
 
-def build_keyword_parser(args=None, session_dir=None):
+def build_keyword_parser(args=None, session_dir=None, file_prefix=""):
     """Build the KeywordParser from keyword_parser.KEYWORDS.
 
     Args:
         args: Parsed command-line arguments. Unused for now; accepted so
             options can later control keyword parsing without changing callers.
         session_dir: Session log directory; parsed results are saved under
-            ``<session_dir>/parsed_keyword/`` when given.
+            ``<session_dir>/parsed_keyword/`` when given, unless
+            --no-save-keywords was passed.
+        file_prefix: Prepended to each result file name so runs sharing a
+            folder don't mix (e.g. "14_22_01_COM5_" -> 14_22_01_COM5_START.jsonl).
 
     Returns:
         A KeywordParser, or None if KEYWORDS is empty (parsing disabled).
     """
     if args and getattr(args, "no_keywords", False):
         return None
-    return KeywordParser(session_dir, KEYWORDS) if KEYWORDS else None
+    if args and getattr(args, "no_save_keywords", False):
+        session_dir = None
+    return KeywordParser(session_dir, KEYWORDS, file_prefix) if KEYWORDS else None
 
 
 def add_common_args(parser):
@@ -372,6 +390,7 @@ def add_common_args(parser):
     parser.add_argument("--date", action="store_true", help="Include the date in every line's timestamp (default: time only; the session banner always records the full start date)")
     parser.add_argument("--format", choices=["text", "csv", "json"], default="text", help="Log file format (default: text). csv -> .csv with timestamp,matched,line columns; json -> JSON Lines (.jsonl), one object per line")
     parser.add_argument("--no-keywords", action="store_true", help="Disable keyword parsing (see KEYWORDS in keyword_parser.py)")
+    parser.add_argument("--no-save-keywords", action="store_true", help="Parse keywords but don't save results to <session>/parsed_keyword/*.jsonl")
     parser.add_argument("--no-interactive", dest="interactive", action="store_false",
                         help="Receive-only; don't forward your stdin to the connection")
     parser.add_argument("--eol", choices=EOL_MAP, default="lf",

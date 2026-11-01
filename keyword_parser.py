@@ -1,11 +1,8 @@
 """Matches log lines against named keyword patterns and extracts their fields."""
 import json
 import re
-from datetime import datetime
 from dataclasses import dataclass, field
 from pathlib import Path
-
-from ansi import ANSI_DIM, ANSI_RESET
 
 
 # Keywords matched by default. Name -> regex; named groups become the fields.
@@ -13,12 +10,6 @@ from ansi import ANSI_DIM, ANSI_RESET
 KEYWORDS = {
     "START": r"\bSTART\b(?:\s+(?P<id>\w+))?",
 }
-
-
-def _timestamp():
-    """Current time as HH:MM:SS.mmm (same format as log_common.timestamp, which
-    can't be imported here without a circular import)."""
-    return datetime.now().strftime("%H:%M:%S.%f")[:-3]
 
 
 @dataclass
@@ -50,13 +41,18 @@ class KeywordParser:
         data: The StartData from the most recent START line, or None.
     """
 
-    def __init__(self, session_dir=None, keywords=KEYWORDS):
+    def __init__(self, session_dir=None, keywords=KEYWORDS, file_prefix=""):
         """Initializes the parser.
 
         Args:
             session_dir: Session log directory; if given, every parsed result
                 is appended as a JSON line to
-                ``<session_dir>/parsed_keyword/<KEYWORD>.jsonl``.
+                ``<session_dir>/parsed_keyword/<KEYWORD>.jsonl``. If None,
+                results are only returned and printed, never saved. Call
+                close() when done to close the files.
+            file_prefix: Prepended to each result file name, e.g.
+                "14_22_01_COM5_" -> ``14_22_01_COM5_START.jsonl``, so runs
+                that share a session directory keep separate files.
             keywords: Mapping of keyword name to a regular expression, given
                 either as a string or as an already compiled pattern.
         """
@@ -64,6 +60,8 @@ class KeywordParser:
         self.session_dir = Path(session_dir) / "parsed_keyword" if session_dir else None
         self.patterns = {name: re.compile(pattern) for name, pattern in keywords.items()}
         self.data = None
+        self.file_prefix = file_prefix
+        self._files = {}  # keyword -> open .jsonl file, kept open for the session
 
     def feed(self, line):
         """Detects a keyword line, then parses the line that follows it.
@@ -94,10 +92,19 @@ class KeywordParser:
         """Appends a parse result to its keyword's JSON Lines file, if enabled."""
         if not self.session_dir:
             return
-        self.session_dir.mkdir(parents=True, exist_ok=True)
-        path = self.session_dir / f"{result['keyword']}.jsonl"
-        with open(path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(result, ensure_ascii=False) + "\n")
+        f = self._files.get(result["keyword"])
+        if f is None:
+            self.session_dir.mkdir(parents=True, exist_ok=True)
+            path = self.session_dir / f"{self.file_prefix}{result['keyword']}.jsonl"
+            f = self._files[result["keyword"]] = open(path, "a", encoding="utf-8")
+        f.write(json.dumps(result, ensure_ascii=False) + "\n")
+        f.flush()  # keep results on disk if the logger is killed
+
+    def close(self):
+        """Closes the result files opened by _save()."""
+        for f in self._files.values():
+            f.close()
+        self._files.clear()
 
     def parse(self, name, line):
         """Extracts the fields of a line for a known keyword.
@@ -120,11 +127,5 @@ class KeywordParser:
         if name == "START":
             self.data = StartData(raw=line.replace("\n", ""), fields=fields)
         # Additional logic for other keywords can be added here.
-
-        if fields:
-            pretty = " ".join(f"{k}={v}" for k, v in fields.items())
-            print(f"{ANSI_DIM}[{_timestamp()}] {name} -> {pretty}{ANSI_RESET}")
-        else:
-            print(f"{ANSI_DIM}[{_timestamp()}] {name} -> {line}{ANSI_RESET}")
 
         return result

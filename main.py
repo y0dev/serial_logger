@@ -25,11 +25,12 @@ from log_common import (
     start_stdin_reader,
     timestamp,
     write_marker,
+    write_sent,
     write_session_banner,
 )
 
 RECONNECT_DELAY_SEC = 2
-MAX_RETRIES = 10
+MAX_RETRIES = 5  # 5 x 2 s: give up after ~10 s of failed reconnects
 
 
 def list_ports():
@@ -65,9 +66,12 @@ def run(args):
     writer, log_path = open_log_writer(args, port)
     color = args.color and sys.stdout.isatty()  # no ANSI in redirected output
     mark_cmd = args.mark_cmd if args.markers else None
-    keyword_parser: KeywordParser = build_keyword_parser(args, log_path.parent)
+    # Name keyword result files after this run's log (base name, not a .partNNNN).
+    keyword_parser: KeywordParser = build_keyword_parser(args, log_path.parent,
+                                                         f"{writer.base_path.stem}_")
     reader = start_stdin_reader(args.interactive, args.eol, mark_cmd,
-                                lambda label: write_marker(writer, label, color))
+                                lambda label: write_marker(writer, label, color),
+                                lambda line: write_sent(writer, line))
     print(f"Logging {port} @ {args.baud} baud to {log_path}")
     if args.interactive:
         print("Interactive mode: type to send to the port.")
@@ -102,6 +106,8 @@ def run(args):
         print("\nStopped.")
     finally:
         writer.close()
+        if keyword_parser:
+            keyword_parser.close()
 
 
 def parse_args():
